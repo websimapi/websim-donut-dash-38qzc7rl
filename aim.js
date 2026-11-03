@@ -1,0 +1,19 @@
+import * as THREE from 'three';
+import {step,impulse} from './server.js';
+export function aimControl(canvas,scene,camera,getState,isPlaying,onPush,low){
+ let drag=null,releaseTime=0,vector={power:0,steer:0,forward:1},active=false;const color=new THREE.Color('#f9ebc1');
+ const material=new THREE.MeshBasicMaterial({color,transparent:true,opacity:.88,depthTest:false,depthWrite:false,side:THREE.DoubleSide});const shaft=new THREE.Mesh(new THREE.BufferGeometry(),material);shaft.renderOrder=50;const head=new THREE.Mesh(new THREE.ConeGeometry(.28,.75,12),material);head.renderOrder=51;const base=new THREE.Mesh(new THREE.RingGeometry(.34,.44,40),material);base.rotation.x=-Math.PI/2;base.renderOrder=50;scene.add(shaft,head,base);shaft.visible=head.visible=base.visible=false;
+ const right=new THREE.Vector3(),screenUp=new THREE.Vector3(),dir=new THREE.Vector3();
+ function direction(dx,dy){camera.updateMatrixWorld();right.setFromMatrixColumn(camera.matrixWorld,0);right.y=0;right.normalize();screenUp.setFromMatrixColumn(camera.matrixWorld,1);screenUp.y=0;screenUp.normalize();dir.copy(right).multiplyScalar(dx).addScaledVector(screenUp,-dy);const len=Math.hypot(dx,dy);if(dir.length()<.001)dir.set(0,0,1);dir.normalize();return {power:Math.min(1.5,len/120),steer:dir.x,forward:dir.z};}
+ canvas.addEventListener('pointerdown',e=>{if(!isPlaying()||drag)return;drag={id:e.pointerId,x:e.clientX,y:e.clientY,dx:0,dy:0};canvas.setPointerCapture(e.pointerId);active=true;releaseTime=0;vector={power:0,steer:0,forward:1};});
+ canvas.addEventListener('pointermove',e=>{if(!drag||drag.id!==e.pointerId)return;drag.dx=e.clientX-drag.x;drag.dy=e.clientY-drag.y;vector=direction(drag.dx,drag.dy);});
+ canvas.addEventListener('pointerup',e=>{if(!drag||drag.id!==e.pointerId)return;const dx=e.clientX-drag.x,dy=e.clientY-drag.y;if(Math.hypot(dx,dy)>=12){vector=direction(dx,dy);onPush(vector);releaseTime=performance.now();}else{vector={...direction(0,-36),power:.3};onPush(vector);releaseTime=performance.now();}drag=null;});
+ canvas.addEventListener('pointercancel',()=>{drag=null;active=false;});
+ const points=[],a=new THREE.Vector3(),b=new THREE.Vector3(),normal=new THREE.Vector3(),verts=[],indices=[];
+ return {hide(){drag=null;active=false;shaft.visible=head.visible=base.visible=false;},update(time,seed){if(!isPlaying()){active=false;drag=null;}if(releaseTime&&time-releaseTime>420)active=false;shaft.visible=head.visible=base.visible=active;if(!active)return;const state=getState(),sim={...state};if(drag)impulse(sim,vector.power,vector.steer,vector.forward);points.length=0;points.push(new THREE.Vector3(sim.x,0,sim.z));let hit=false;
+ // Predict the same seeded physics as the server, including upcoming collisions.
+ for(let i=0;i<(low?16:26);i++){const before=sim.hits;step(sim,.045,seed);points.push(new THREE.Vector3(sim.x,0,sim.z));if(sim.hits!==before){hit=true;break;}}
+ // The ribbon follows the actual ground rather than a straight HUD vector.
+ verts.length=0;indices.length=0;for(let i=0;i<points.length;i++){const pt=points[i],next=points[Math.min(i+1,points.length-1)],prev=points[Math.max(i-1,0)];a.copy(next).sub(prev);normal.set(-a.z,0,a.x).normalize().multiplyScalar(.075);pt.y=state.groundHeight(pt.x,pt.z,seed)+.13;verts.push(pt.x+normal.x,pt.y,pt.z+normal.z,pt.x-normal.x,pt.y,pt.z-normal.z);if(i<points.length-1){const k=i*2;indices.push(k,k+1,k+2,k+1,k+3,k+2);}}
+ const geo=new THREE.BufferGeometry();geo.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));geo.setIndex(indices);shaft.geometry.dispose();shaft.geometry=geo;const end=points[points.length-1],last=points[points.length-2];dir.copy(end).sub(last).normalize();head.position.copy(end);head.quaternion.setFromUnitVectors(new THREE.Vector3(0,1,0),dir);base.position.set(state.x,state.groundHeight(state.x,state.z,seed)+.1,state.z);material.color.set(hit?'#ed8e52':'#fff0b7');material.opacity=releaseTime?.8*(1-(time-releaseTime)/500):.9;}};
+}
